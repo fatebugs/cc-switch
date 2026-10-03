@@ -165,7 +165,26 @@ interface CodexFormFieldsProps {
 
 type CodexCatalogRow = CodexCatalogModel & { rowId: string };
 
-function createCatalogRow(seed?: Partial<CodexCatalogModel>): CodexCatalogRow {
+const DEFAULT_CODEX_REASONING_LEVELS = [
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+  "ultra",
+] as const;
+
+function createCatalogRow(
+  seed?: Partial<CodexCatalogModel>,
+  useDefaultReasoningLevels = false,
+): CodexCatalogRow {
+  const reasoningLevels =
+    seed?.reasoningLevels && seed.reasoningLevels.length > 0
+      ? seed.reasoningLevels
+      : useDefaultReasoningLevels
+        ? [...DEFAULT_CODEX_REASONING_LEVELS]
+        : undefined;
+
   return {
     rowId: crypto.randomUUID(),
     model: seed?.model ?? "",
@@ -180,9 +199,7 @@ function createCatalogRow(seed?: Partial<CodexCatalogModel>): CodexCatalogRow {
     ...(seed?.baseInstructions
       ? { baseInstructions: seed.baseInstructions }
       : {}),
-    ...(seed?.reasoningLevels && seed.reasoningLevels.length > 0
-      ? { reasoningLevels: seed.reasoningLevels }
-      : {}),
+    ...(reasoningLevels ? { reasoningLevels } : {}),
     ...(seed?.defaultReasoningLevel
       ? { defaultReasoningLevel: seed.defaultReasoningLevel }
       : {}),
@@ -452,6 +469,7 @@ export function CodexFormFields({
 
   useEffect(() => {
     fetchModelsSeqRef.current += 1;
+    setIsFetchingModels(false);
     setFetchedModels((prev) => (prev.length === 0 ? prev : []));
   }, [
     codexBaseUrl,
@@ -571,7 +589,7 @@ export function CodexFormFields({
     [codexChatReasoning, onCodexChatReasoningChange],
   );
 
-  const handleFetchModels = useCallback(() => {
+  const fetchModels = useCallback(async (): Promise<FetchedModel[]> => {
     // xAI OAuth 托管预设：不走 base_url + key 的 /models 探测，
     // 直接用托管账号 token 拉取（与 Claude 表单同一后端命令）
     if (isXaiOauthPreset) {
@@ -581,49 +599,16 @@ export function CodexFormFields({
             defaultValue: "请先登录 xAI 账号",
           }),
         );
-        return;
+        return [];
       }
       const seq = ++fetchModelsSeqRef.current;
       setIsFetchingModels(true);
-      fetchXaiOauthModels(selectedXaiAccountId ?? null)
-        .then((models) => {
-          if (seq !== fetchModelsSeqRef.current) return;
-          setFetchedModels(models);
-          if (models.length === 0) {
-            toast.info(t("providerForm.fetchModelsEmpty"));
-          } else {
-            toast.success(
-              t("providerForm.fetchModelsSuccess", { count: models.length }),
-            );
-          }
-        })
-        .catch((err) => {
-          if (seq !== fetchModelsSeqRef.current) return;
-          console.warn("[XaiOAuth] Failed to fetch models:", err);
-          showFetchModelsError(err, t);
-        })
-        .finally(() => setIsFetchingModels(false));
-      return;
-    }
-
-    if (!codexBaseUrl || !codexApiKey) {
-      showFetchModelsError(null, t, {
-        hasApiKey: !!codexApiKey,
-        hasBaseUrl: !!codexBaseUrl,
-      });
-      return;
-    }
-    const seq = ++fetchModelsSeqRef.current;
-    setIsFetchingModels(true);
-    fetchModelsForConfig(
-      codexBaseUrl,
-      codexApiKey,
-      isFullUrl,
-      undefined,
-      customUserAgent,
-    )
-      .then((models) => {
-        if (seq !== fetchModelsSeqRef.current) return;
+      try {
+        const result = await fetchXaiOauthModels(selectedXaiAccountId ?? null);
+        if (seq !== fetchModelsSeqRef.current) return [];
+        const models = [
+          ...new Map(result.map((model) => [model.id, model])).values(),
+        ];
         setFetchedModels(models);
         if (models.length === 0) {
           toast.info(t("providerForm.fetchModelsEmpty"));
@@ -632,13 +617,55 @@ export function CodexFormFields({
             t("providerForm.fetchModelsSuccess", { count: models.length }),
           );
         }
-      })
-      .catch((err) => {
-        if (seq !== fetchModelsSeqRef.current) return;
-        console.warn("[ModelFetch] Failed:", err);
+        return models;
+      } catch (err) {
+        if (seq !== fetchModelsSeqRef.current) return [];
+        console.warn("[XaiOAuth] Failed to fetch models:", err);
         showFetchModelsError(err, t);
-      })
-      .finally(() => setIsFetchingModels(false));
+        return [];
+      } finally {
+        if (seq === fetchModelsSeqRef.current) setIsFetchingModels(false);
+      }
+    }
+
+    if (!codexBaseUrl || !codexApiKey) {
+      showFetchModelsError(null, t, {
+        hasApiKey: !!codexApiKey,
+        hasBaseUrl: !!codexBaseUrl,
+      });
+      return [];
+    }
+    const seq = ++fetchModelsSeqRef.current;
+    setIsFetchingModels(true);
+    try {
+      const result = await fetchModelsForConfig(
+        codexBaseUrl,
+        codexApiKey,
+        isFullUrl,
+        undefined,
+        customUserAgent,
+      );
+      if (seq !== fetchModelsSeqRef.current) return [];
+      const models = [
+        ...new Map(result.map((model) => [model.id, model])).values(),
+      ];
+      setFetchedModels(models);
+      if (models.length === 0) {
+        toast.info(t("providerForm.fetchModelsEmpty"));
+      } else {
+        toast.success(
+          t("providerForm.fetchModelsSuccess", { count: models.length }),
+        );
+      }
+      return models;
+    } catch (err) {
+      if (seq !== fetchModelsSeqRef.current) return [];
+      console.warn("[ModelFetch] Failed:", err);
+      showFetchModelsError(err, t);
+      return [];
+    } finally {
+      if (seq === fetchModelsSeqRef.current) setIsFetchingModels(false);
+    }
   }, [
     codexBaseUrl,
     codexApiKey,
@@ -649,6 +676,10 @@ export function CodexFormFields({
     selectedXaiAccountId,
     t,
   ]);
+
+  const handleFetchModels = useCallback(() => {
+    void fetchModels();
+  }, [fetchModels]);
 
   const fillModelMetadata = useModelMetadataFill({
     baseUrl: codexBaseUrl,
@@ -684,7 +715,10 @@ export function CodexFormFields({
 
   const handleAddCatalogRow = useCallback(() => {
     if (!onCatalogModelsChange) return;
-    setCatalogRows((current) => [...current, createCatalogRow()]);
+    setCatalogRows((current) => [
+      ...current,
+      createCatalogRow(undefined, true),
+    ]);
   }, [onCatalogModelsChange]);
 
   // Stack 布局没有默认模型字段，★ 标出的就是 `model`：它不在列表里时哪一行都不标；没填时
@@ -770,20 +804,33 @@ export function CodexFormFields({
     [catalogRows, onModelChange],
   );
 
-  // 批量勾选拉取到的模型加入列表（Stack 布局）。
+  // 批量将拉取到的模型加入列表。
   const handleAddFetchedCatalogRows = useCallback(
     (modelIds: string[]) => {
       const current = catalogRowsRef.current;
       const configured = new Set(current.map((row) => row.model.trim()));
-      const additions = modelIds
-        .filter((id) => !configured.has(id))
-        .map((id) => createCatalogRow({ model: id, displayName: id }));
+      const additions: CodexCatalogRow[] = [];
+      for (const rawId of modelIds) {
+        const id = rawId.trim();
+        if (!id || configured.has(id)) continue;
+        configured.add(id);
+        additions.push(
+          createCatalogRow({ model: id, displayName: id }, true),
+        );
+      }
       if (additions.length === 0) return;
       commitCatalogRows([...current, ...additions]);
-      for (const row of additions) fillCatalogRowMetadata(row.rowId, row.model);
     },
-    [catalogRowsRef, commitCatalogRows, fillCatalogRowMetadata],
+    [catalogRowsRef, commitCatalogRows],
   );
+
+  const handleFetchAndAddModels = useCallback(() => {
+    void fetchModels().then((models) => {
+      if (models.length > 0) {
+        handleAddFetchedCatalogRows(models.map((model) => model.id));
+      }
+    });
+  }, [fetchModels, handleAddFetchedCatalogRows]);
 
   // 默认模型下拉建议 = 模型映射的"实际请求模型"列 ∪ 拉取到的 /models 列表
   const defaultModelSuggestions = useMemo<FetchedModel[]>(() => {
@@ -816,25 +863,26 @@ export function CodexFormFields({
 
   const handleAddDefaultModelToCatalog = useCallback(() => {
     if (!onCatalogModelsChange || !trimmedDefaultModel) return;
-    const row = createCatalogRow({
-      model: trimmedDefaultModel,
-      displayName: trimmedDefaultModel,
-    });
+    const row = createCatalogRow(
+      {
+        model: trimmedDefaultModel,
+        displayName: trimmedDefaultModel,
+      },
+      true,
+    );
     // Stack 布局里默认模型排第一位。
     const rows = catalogRowsRef.current;
     commitCatalogRows(variant === "stack" ? [row, ...rows] : [...rows, row]);
-    fillCatalogRowMetadata(row.rowId, trimmedDefaultModel);
   }, [
     catalogRowsRef,
     commitCatalogRows,
-    fillCatalogRowMetadata,
     onCatalogModelsChange,
     trimmedDefaultModel,
     variant,
   ]);
 
   const renderCatalogActionButtons = (onAdd: () => void, addLabel: string) => (
-    <div className="flex gap-1">
+    <div className="flex flex-wrap justify-end gap-1">
       <Button
         type="button"
         variant="outline"
@@ -849,6 +897,23 @@ export function CodexFormFields({
           <Download className="h-3.5 w-3.5" />
         )}
         {t("providerForm.fetchModels")}
+      </Button>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        onClick={handleFetchAndAddModels}
+        disabled={isFetchingModels}
+        className="h-7 gap-1"
+      >
+        {isFetchingModels ? (
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        ) : (
+          <Download className="h-3.5 w-3.5" />
+        )}
+        {t("providerForm.fetchAndAddModels", {
+          defaultValue: "获取并添加",
+        })}
       </Button>
       <Button
         type="button"

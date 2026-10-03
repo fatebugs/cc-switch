@@ -1364,6 +1364,7 @@
     "categoryAggregation": "Aggregation",
     "categoryThirdParty": "Third Party",
     "fetchModels": "Fetch Models",
+    "fetchAndAddModels": "Fetch & Add",
     "fetchingModels": "Fetching...",
     "searchModelPlaceholder": "Search models...",
     "searchModelEmpty": "No matching models.",

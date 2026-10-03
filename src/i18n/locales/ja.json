@@ -1364,6 +1364,7 @@
     "categoryAggregation": "アグリゲーター",
     "categoryThirdParty": "サードパーティ",
     "fetchModels": "モデル一覧を取得",
+    "fetchAndAddModels": "取得して追加",
     "fetchingModels": "取得中...",
     "searchModelPlaceholder": "モデルを検索...",
     "searchModelEmpty": "一致するモデルがありません",
